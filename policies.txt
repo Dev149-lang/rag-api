@@ -1,0 +1,4 @@
+SECURITY POLICY v1.0
+Data Retention: All European Union customer data must be deleted after 30 days of inactivity to comply with GDPR.
+Password Policy: Passwords must be at least 14 characters long, contain two special characters, and be rotated every 90 days.
+Infrastructure: All cloud infrastructure must be provisioned using Terraform. Manual console changes are strictly prohibited.
