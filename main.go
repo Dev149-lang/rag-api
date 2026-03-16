@@ -108,7 +108,7 @@ func main() {
 			return
 		}
 
-		// 3. Use chains.Call instead of chains.Run so we can get the full map of outputs back
+		// 3. Use chains.Call instead of chains.Run
 		res, err := chains.Call(r.Context(), qaChain, map[string]any{
 			"query": req.Query,
 		})
@@ -117,8 +117,17 @@ func main() {
 			return
 		}
 
-		answer := res["result"].(string)
-
+		// extraction block
+		var answer string
+		if val, ok := res["text"].(string); ok {
+			answer = val
+		} else if val, ok := res["result"].(string); ok {
+			answer = val
+		} else {
+			http.Error(w, "Failed to parse the AI response format", http.StatusInternalServerError)
+			return
+		}
+		
 		// 4. Extract the source documents and format them for the API response
 		var sourceList []string
 		if docs, ok := res["source_documents"].([]schema.Document); ok {
