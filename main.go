@@ -15,6 +15,7 @@ import (
 	"github.com/tmc/langchaingo/documentloaders"
 	"github.com/tmc/langchaingo/embeddings"
 	"github.com/tmc/langchaingo/llms/googleai"
+	"github.com/tmc/langchaingo/schema"
 	"github.com/tmc/langchaingo/textsplitter"
 	"github.com/tmc/langchaingo/vectorstores"
 	"github.com/tmc/langchaingo/vectorstores/chroma"
@@ -24,8 +25,13 @@ type QueryRequest struct {
 	Query string `json:"query"`
 }
 
+// 1. New Response Struct to hold both Answer and Sources
+type QueryResponse struct {
+	Answer  string   `json:"answer"`
+	Sources []string `json:"sources"`
+}
+
 func main() {
-	// 1. Load Environment Variables
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, relying on system environment variables")
 	}
@@ -37,36 +43,31 @@ func main() {
 		log.Fatal("GEMINI_API_KEY not found in .env file")
 	}
 
-	
-	// 2. Initialize the LLM (Google Gemini)
 	llm, err := googleai.New(ctx, 
 		googleai.WithAPIKey(apiKey), 
-		googleai.WithDefaultModel("gemini-2.5-flash"), // <-- CHANGE THIS TO 2.5
+		googleai.WithDefaultModel("gemini-2.5-flash"), 
 		googleai.WithDefaultEmbeddingModel("gemini-embedding-001"), 
 	)
 	if err != nil {
 		log.Fatalf("Failed to create Gemini LLM: %v", err)
 	}
 
-	// 3. Initialize the Gemini Embedder
 	embedder, err := embeddings.NewEmbedder(llm)
 	if err != nil {
 		log.Fatalf("Failed to create embedder: %v", err)
 	}
 
-	// 4. Set up the Vector Store (ChromaDB) with Gemini Embeddings
 	store, err := chroma.New(
 		chroma.WithChromaURL("http://localhost:8000"),
 		chroma.WithDistanceFunction("cosine"),
 		chroma.WithNameSpace("corporate_policies"),
-		chroma.WithEmbedder(embedder), // This forces Chroma to use Gemini instead of OpenAI
+		chroma.WithEmbedder(embedder), 
 	)
 	if err != nil {
 		log.Fatalf("Failed to connect to Chroma: %v", err)
 	}
 
-	// 5. Ingest Documents
-	fmt.Println("Ingesting security policies using Gemini embeddings...")
+	fmt.Println("Ingesting security policies...")
 	file, err := os.Open("policies.txt")
 	if err != nil {
 		log.Fatalf("Failed to open policies file: %v", err)
@@ -89,13 +90,13 @@ func main() {
 	}
 	fmt.Println("Policies ingested successfully!")
 
-	// 6. Build the Retrieval QA Chain
 	qaChain := chains.NewRetrievalQAFromLLM(
 		llm,
-		vectorstores.ToRetriever(store, 3), // Retrieve top 3 relevant chunks
+		vectorstores.ToRetriever(store, 3), 
 	)
+	// 2. Tell the chain to preserve the documents it retrieved
+	qaChain.ReturnSourceDocuments = true 
 
-	// 7. Set up the API Router
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -107,21 +108,44 @@ func main() {
 			return
 		}
 
-		// Run the query through our RAG chain
-		answer, err := chains.Run(r.Context(), qaChain, req.Query)
+		// 3. Use chains.Call instead of chains.Run so we can get the full map of outputs back
+		res, err := chains.Call(r.Context(), qaChain, map[string]any{
+			"query": req.Query,
+		})
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to process query: %v", err), http.StatusInternalServerError)
 			return
 		}
 
-		// Return the answer
+		answer := res["result"].(string)
+
+		// 4. Extract the source documents and format them for the API response
+		var sourceList []string
+		if docs, ok := res["source_documents"].([]schema.Document); ok {
+			for i, doc := range docs {
+				// Grab the filename from the metadata (if it exists)
+				fileName := "Unknown Source"
+				if src, exists := doc.Metadata["source"]; exists {
+					fileName = fmt.Sprintf("%v", src)
+				}
+				
+				// Grab a quick snippet of the text that matched
+				snippet := doc.PageContent
+				if len(snippet) > 60 {
+					snippet = snippet[:60] + "..."
+				}
+				
+				sourceList = append(sourceList, fmt.Sprintf("%s (Match %d) - \"%s\"", fileName, i+1, snippet))
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"answer": answer,
+		json.NewEncoder(w).Encode(QueryResponse{
+			Answer:  answer,
+			Sources: sourceList,
 		})
 	})
 
-	// 8. Start the Server
 	fmt.Println("Starting Security Policy API on :8080...")
 	http.ListenAndServe(":8080", r)
 }
