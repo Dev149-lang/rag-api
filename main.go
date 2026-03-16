@@ -25,7 +25,7 @@ type QueryRequest struct {
 	Query string `json:"query"`
 }
 
-// 1. New Response Struct to hold both Answer and Sources
+//j
 type QueryResponse struct {
 	Answer  string   `json:"answer"`
 	Sources []string `json:"sources"`
